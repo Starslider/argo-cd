@@ -2,9 +2,76 @@
 
 Argo CD can be easily integrated into a Service Mesh like [Istio](https://istio.io) but there are some configuration changes you should do.
 
+The Argo CD API server should be run with TLS disabled. Edit the `argocd-server` Deployment to add the `--insecure` flag to the argocd-server container command, or simply set `server.insecure: "true"` in the `argocd-cmd-params-cm` ConfigMap [as described here](server-commands/additional-configuration-method.md).
+
+## Namespace
+
+To activate the istio sidecar injection, the istio-injection label must be added to the argocd namespace.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    istio-injection: enabled
+```
+
+## Virtual Service
+
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: argocd-server
+spec:
+  gateways:
+    - ingress-gateway/istio
+  hosts:
+    - 'external.path.to.argocd.io'
+  http:
+  - match:
+    - gateways:
+      - ingress-gateway/istio
+      port: 443
+    route:
+    - destination:
+        host: argocd-server
+        port:
+          number: 443
+```
+
 ## Network Policies
 
-With the last versions of Argo CD, there were some security mitigations introduced which maybe block the communication to or from istio. 
+### allow-inbound-from-ingress-to-argocd-server
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-inbound-from-ingress-to-argocd-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: server
+      app.kubernetes.io/name: argocd-server
+      app.kubernetes.io/part-of: argocd
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              namespace: ingress-gateway
+          podSelector:
+            matchLabels:
+              app: ingress-gateway
+              istio: ingress-gateway
+      ports:
+        - port: 8080
+  policyTypes:
+    - Ingress
+```
+
+With the last versions of Argo CD, there were some security mitigations introduced which can block the communication to or from istiod. To fix that issue, you should add port 15012 to the redis egress configuration in the following Network Policies.
 
 ### [argocd-redis-network-policy](https://github.com/argoproj/argo-cd/blob/master/manifests/base/redis/argocd-redis-network-policy.yaml)
 
